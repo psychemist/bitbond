@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
+import { CreateTaskModal } from '@/components/CreateTaskModal';
 import { 
   Zap, 
   Shield, 
@@ -56,6 +57,7 @@ export default function HomePage() {
   const [recentTasks, setRecentTasks] = useState<Task[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [contract] = useState(new BitBondContract());
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
 
   const handleConnectWallet = async () => {
     setIsLoading(true);
@@ -85,6 +87,26 @@ export default function HomePage() {
       console.error('Failed to connect wallet:', error);
     }
     setIsLoading(false);
+  };
+
+  const handleTaskCreated = (newTask: Task) => {
+    setRecentTasks(prev => [newTask, ...prev]);
+    // Refresh user stats
+    if (userAddress) {
+      contract.getUserStats(userAddress).then(stats => {
+        if (stats) {
+          setUserStats({
+            tasksCreated: Number(stats.tasksCreated),
+            tasksCompleted: Number(stats.tasksCompleted),
+            tasksFailed: Number(stats.tasksFailed),
+            totalStaked: stats.totalStaked,
+            successRate: stats.tasksCreated > 0 
+              ? (Number(stats.tasksCompleted) / Number(stats.tasksCreated)) * 100 
+              : 0
+          });
+        }
+      });
+    }
   };
 
   useEffect(() => {
@@ -180,7 +202,12 @@ export default function HomePage() {
                 </div>
               )}
               
-              <Button variant="outline" className="border-white text-white hover:bg-white/10 px-8 py-3 text-lg">
+              <Button 
+                variant="outline" 
+                className="border-white text-white hover:bg-white/10 px-8 py-3 text-lg"
+                onClick={() => setIsCreateModalOpen(true)}
+                disabled={!isConnected}
+              >
                 <Target className="mr-2 h-5 w-5" />
                 Create Task
               </Button>
@@ -418,6 +445,14 @@ export default function HomePage() {
           </div>
         </div>
       </section>
+
+      {/* Create Task Modal */}
+      <CreateTaskModal
+        isOpen={isCreateModalOpen}
+        onClose={() => setIsCreateModalOpen(false)}
+        onTaskCreated={handleTaskCreated}
+        userAddress={userAddress}
+      />
     </main>
   );
 }
