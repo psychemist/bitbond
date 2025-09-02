@@ -2,8 +2,13 @@ import React, { useState } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogClose } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input, Textarea, Label } from '@/components/ui/input';
-import { BitBondContract } from '@/lib/contract';
 import { X, Calendar, User, DollarSign, FileText, Target } from 'lucide-react';
+import { getCurrentBlockHeight, CONTRACT_ADDRESS, callContractWithRequest, NETWORK, isConnected, getLocalStorage, userSession } from '@/lib/stacks';
+import { 
+  standardPrincipalCV,
+  stringAsciiCV,
+  uintCV
+} from '@stacks/transactions';
 
 interface CreateTaskModalProps {
   open: boolean;
@@ -27,63 +32,107 @@ export const CreateTaskModal: React.FC<CreateTaskModalProps> = ({
     deadline: ''
   });
 
-  const contract = new BitBondContract();
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     console.log('Form submission started', formData);
+
+    if (!CONTRACT_ADDRESS) {
+      alert('Contract address is not configured. Set NEXT_PUBLIC_CONTRACT_ADDRESS in env.');
+      return;
+    }
     
     if (!formData.title || !formData.description || !formData.buddyAddress || !formData.stakeAmount || !formData.deadline) {
       alert('Please fill in all fields');
       return;
     }
 
+    const stakeFloat = parseFloat(formData.stakeAmount);
+    if (isNaN(stakeFloat) || stakeFloat <= 0) {
+      alert('Stake amount must be a positive number');
+      return;
+    }
+
+    const deadlineDate = new Date(formData.deadline);
+    if (isNaN(deadlineDate.getTime())) {
+      alert('Invalid deadline');
+      return;
+    }
+    const now = Date.now();
+    if (deadlineDate.getTime() <= now) {
+      alert('Deadline must be in the future');
+      return;
+    }
+
+    // Check if user is connected
+    if (!isConnected() && !userSession.isUserSignedIn()) {
+      alert('Please connect your wallet first');
+      return;
+    }
+
     setIsSubmitting(true);
     try {
-      const stakeAmountMicroSTX = Math.floor(parseFloat(formData.stakeAmount) * 1000000); // Convert STX to microSTX
-      const deadlineDate = new Date(formData.deadline);
-      const currentTime = Date.now();
-      const deadlineTimestamp = Math.floor(deadlineDate.getTime() / 1000); // Convert to Unix timestamp
-      
-      // Convert to block height (approximate: 1 block ≈ 10 minutes)
-      const currentBlock = Math.floor(currentTime / (10 * 60 * 1000)); // Rough current block
-      const deadlineBlocks = Math.floor(deadlineDate.getTime() / (10 * 60 * 1000)); // Deadline in blocks
-      const blocksFromNow = Math.max(1, deadlineBlocks - currentBlock); // Ensure at least 1 block in future
+      const stakeAmountMicroSTX = Math.floor(stakeFloat * 1_000_000); // Convert STX to microSTX
 
-      console.log('Task parameters:', {
-        buddy: formData.buddyAddress,
-        title: formData.title,
-        description: formData.description,
-        stakeAmount: stakeAmountMicroSTX,
-        deadline: blocksFromNow,
-        deadlineDate: deadlineDate,
-        currentTime: new Date(currentTime)
+      // Accurate block height based deadline
+      const currentBlockHeight = await getCurrentBlockHeight();
+      const avgBlockTimeMs = 600_000; // 10 minutes
+      const deltaBlocks = Math.max(1, Math.ceil((deadlineDate.getTime() - now) / avgBlockTimeMs));
+      const absoluteDeadlineBlock = currentBlockHeight + deltaBlocks;
+
+      console.log('Deadline calculation:', { currentBlockHeight, deltaBlocks, absoluteDeadlineBlock, deadlineDate });
+
+      if (absoluteDeadlineBlock <= currentBlockHeight) {
+        alert('Calculated deadline block is not in the future. Try a later datetime.');
+        return;
+      }
+
+      // Prepare function arguments using CV types
+      const functionArgs = [
+        standardPrincipalCV(formData.buddyAddress.trim()),
+        stringAsciiCV(formData.title.trim()),
+        stringAsciiCV(formData.description.trim()),
+        uintCV(stakeAmountMicroSTX),
+        uintCV(absoluteDeadlineBlock)
+      ];
+
+      console.log('Contract call parameters:', {
+        contractAddress: CONTRACT_ADDRESS,
+        functionArgs,
+        network: NETWORK?.chainId === 2147483648 ? "testnet" : "mainnet"
       });
 
-      const params = {
-        buddy: formData.buddyAddress,
-        title: formData.title,
-        description: formData.description,
-        stakeAmount: stakeAmountMicroSTX,
-        deadline: blocksFromNow // Use block height instead of timestamp
+      // Use the working contract call pattern
+      const options = {
+        contractAddress: CONTRACT_ADDRESS,
+        contractName: 'bitbond-escrow',
+        functionName: 'create-task',
+        functionArgs,
+        network: NETWORK,
+        onFinish: (data: any) => {
+          console.log('✅ Task created successfully:', data);
+          alert(`Task created successfully! Transaction ID: ${data.txId || data}`);
+          
+          // Reset form
+          setFormData({
+            title: '',
+            description: '',
+            buddyAddress: '',
+            stakeAmount: '',
+            deadline: ''
+          });
+
+          onTaskCreated();
+          onOpenChange(false);
+        },
+        onCancel: () => {
+          console.log('❌ Transaction cancelled by user');
+          alert('Transaction was cancelled');
+        },
       };
 
-      console.log('Calling contract.createTask with params:', params);
-      const result = await contract.createTask(params, userAddress);
-      console.log('Contract call result:', result);
-
-      // Reset form
-      setFormData({
-        title: '',
-        description: '',
-        buddyAddress: '',
-        stakeAmount: '',
-        deadline: ''
-      });
-
-      onTaskCreated();
-      onOpenChange(false);
-      alert('Task created successfully! Transaction ID: ' + result);
+      console.log('Calling callContractWithRequest with options:', options);
+      await callContractWithRequest(options);
+      
     } catch (error) {
       console.error('Detailed error creating task:', error);
       alert('Failed to create task: ' + (error instanceof Error ? error.message : 'Unknown error'));

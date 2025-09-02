@@ -83,7 +83,7 @@ export default function HomePage() {
         } else if (isUserSignedIn()) {
           // User is already signed in
           const userData = getCurrentUserData();
-          if (userData && mounted) {
+          if (userData && mounted && typeof userData !== 'string' && userData.profile) {
             console.log('✅ User already authenticated:', userData.profile.stxAddress.testnet);
             const address = userData.profile.stxAddress.testnet;
             setUserAddress(address);

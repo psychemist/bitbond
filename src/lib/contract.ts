@@ -83,14 +83,7 @@ export class BitBondContract {
     
     return new Promise((resolve, reject) => {
       const timeoutId = setTimeout(() => {
-        console.error('Contract call timed out after 60 seconds');
-        console.log('🔍 Troubleshooting steps:');
-        console.log('1. ✅ Check if Xverse extension popup was blocked by browser');
-        console.log('2. ✅ Verify Xverse is connected to Testnet (not Mainnet)');
-        console.log('3. ✅ Ensure you have testnet STX for transaction fees');
-        console.log('4. ✅ Try refreshing the page and reconnecting wallet');
-        console.log('5. ✅ Check if another wallet extension is interfering');
-        reject(new Error('Transaction timed out after 60 seconds. Please check if Xverse popup was blocked or if you need to switch to Testnet.'));
+        reject(new Error('Transaction timed out after 60 seconds. Please check if popup was blocked or if you need to switch to Testnet.'));
       }, 60000); // Increased to 60 seconds to give more time
 
       try {
@@ -107,14 +100,6 @@ export class BitBondContract {
             reject(new Error('Transaction was cancelled by user'));
           },
         });
-        
-        console.log('✅ openContractCall initiated successfully');
-        console.log('🔄 Waiting for Xverse wallet popup...');
-        console.log('💡 If no popup appears within 10 seconds:');
-        console.log('   - Check browser address bar for popup blocker icon');
-        console.log('   - Ensure Xverse is set to Stacks Testnet');
-        console.log('   - Try clicking the Xverse extension icon manually');
-        
       } catch (error) {
         clearTimeout(timeoutId);
         console.error('❌ openContractCall failed immediately:', error);

@@ -1,129 +1,124 @@
-import { AppConfig, UserSession, showConnect } from '@stacks/connect';
-import { STACKS_MAINNET, STACKS_TESTNET } from '@stacks/network';
+import { AppConfig, UserSession, connect, disconnect, request, isConnected, getLocalStorage } from '@stacks/connect';
+import { STACKS_TESTNET, STACKS_MAINNET } from '@stacks/network';
 
-// Network configuration
-export const NETWORK = process.env.NEXT_PUBLIC_STACKS_NETWORK === 'mainnet' 
-  ? STACKS_MAINNET 
-  : STACKS_TESTNET;
-
+// Network configuration - using exported constants instead of classes
 export const STACKS_API_URL = process.env.NEXT_PUBLIC_STACKS_API_URL || 'https://api.testnet.hiro.so';
+const IS_MAINNET = process.env.NEXT_PUBLIC_STACKS_NETWORK === 'mainnet';
+
+export const NETWORK = IS_MAINNET ? STACKS_MAINNET : STACKS_TESTNET;
 
 export const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || '';
 export const CONTRACT_NAME = process.env.NEXT_PUBLIC_CONTRACT_NAME || 'bitbond-escrow';
-
 export const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 
-// App configuration for Stacks authentication
+// App configuration
 const appConfig = new AppConfig(['store_write', 'publish_data']);
 export const userSession = new UserSession({ appConfig });
 
-// App details for wallet connection
 export const appDetails = {
   name: 'BitBond',
   icon: `${APP_URL}/favicon.ico`,
 };
 
-// Supported wallets - prioritize Leather (Hiro) over others
-export const SUPPORTED_WALLETS = [
-  'leather',  // Hiro Wallet (renamed to Leather)
-  'hiro',     // Legacy name
-  'xverse',
-] as const;
+// Connect wallet using the working pattern from reference
+export const connectWallet = async (): Promise<string> => {
+  console.log("=== Connect Wallet Debug ===");
 
-export type SupportedWallet = typeof SUPPORTED_WALLETS[number];
+  if (typeof window !== "undefined") {
+    console.log("StacksProvider available:", !!(window as any).StacksProvider);
+    console.log("LeatherProvider available:", !!(window as any).LeatherProvider);
+    console.log("Available providers:", Object.keys(window).filter((key) => key.includes("Provider")));
+  }
 
-export async function connectWallet(): Promise<string> {
-  console.log('Attempting to connect wallet...');
-  console.log('Detected wallets:', getAvailableWallets());
-  
-  return new Promise((resolve, reject) => {
-    showConnect({
-      appDetails,
-      onFinish: () => {
-        console.log('Wallet connection finished, handling pending sign in...');
-        // Handle the pending sign in after wallet connection
-        if (userSession.isSignInPending()) {
-          userSession.handlePendingSignIn().then((userData) => {
-            console.log('Sign in completed with Leather wallet:', userData);
-            const address = userData.profile.stxAddress.testnet;
-            console.log('Testnet address:', address);
-            resolve(address);
-          }).catch((error) => {
-            console.error('Error handling pending sign in:', error);
-            reject(error);
-          });
-        } else {
-          // User might already be signed in
-          const userData = userSession.loadUserData();
-          const address = userData.profile.stxAddress.testnet;
-          console.log('User already signed in with Leather, address:', address);
-          resolve(address);
-        }
-      },
-      onCancel: () => {
-        console.log('Wallet connection cancelled');
-        reject(new Error('User cancelled wallet connection'));
-      },
-      userSession,
+  try {
+    await connect();
+    console.log("Wallet connected successfully");
+    
+    // Get user address after connection
+    let userAddress = null;
+    if (isConnected()) {
+      const data = getLocalStorage();
+      if (data?.addresses?.stx && data.addresses.stx.length > 0) {
+        userAddress = data.addresses.stx[0].address;
+      }
+    } else if (userSession.isUserSignedIn()) {
+      const userData = userSession.loadUserData();
+      userAddress = userData.profile.stxAddress.testnet;
+    }
+    
+    return userAddress || '';
+  } catch (error) {
+    console.error("Connection failed:", error);
+    throw error;
+  }
+};
+
+export const disconnectWallet = () => {
+  disconnect();
+  userSession.signUserOut("/");
+};
+
+// Helper function to call contracts using request method (more reliable than openContractCall)
+async function callContractWithRequest(options: any) {
+  try {
+    console.log("=== Contract Call Debug ===");
+    console.log("functionName:", options.functionName);
+    console.log("functionArgs:", options.functionArgs);
+    console.log("Contract:", `${options.contractAddress}.${options.contractName}`);
+    console.log("Network:", options.network?.chainId === 2147483648 ? "testnet" : "mainnet");
+
+    const response = await request("stx_callContract", {
+      contract: `${options.contractAddress}.${options.contractName}` as `${string}.${string}`,
+      functionName: options.functionName,
+      functionArgs: options.functionArgs,
+      network: options.network?.chainId === 2147483648 ? "testnet" : "mainnet",
+      postConditionMode: "allow",
+      postConditions: [],
     });
-  });
+
+    console.log("✅ Transaction submitted successfully:", response);
+    if (options.onFinish) options.onFinish(response);
+    return response;
+  } catch (error) {
+    console.error("❌ Contract call failed:", error);
+    console.error("Error details:", {
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    if (options.onCancel) options.onCancel();
+    throw error;
+  }
 }
 
 // Detect available wallet providers
 export function getAvailableWallets(): string[] {
   if (typeof window === 'undefined') return [];
-  
   const wallets: string[] = [];
-  
-  // Check for Leather (Hiro) wallet
-  if ((window as any).LeatherProvider || (window as any).HiroWalletProvider) {
-    wallets.push('leather');
-  }
-  
-  // Check for Xverse
-  if ((window as any).StacksProvider || (window as any).XverseProviders) {
-    wallets.push('xverse');
-  }
-  
+  if ((window as any).LeatherProvider || (window as any).HiroWalletProvider) wallets.push('leather');
+  if ((window as any).StacksProvider || (window as any).XverseProviders) wallets.push('xverse');
   return wallets;
 }
 
 // Check if user is already authenticated
-export function isUserSignedIn(): boolean {
-  return userSession.isUserSignedIn();
+export function isUserSignedIn(): boolean { 
+  return isConnected() || userSession.isUserSignedIn(); 
 }
 
 // Get current user data if signed in
-export function getCurrentUserData() {
-  if (userSession.isUserSignedIn()) {
-    return userSession.loadUserData();
+export function getCurrentUserData() { 
+  if (isConnected()) {
+    const data = getLocalStorage();
+    return data?.addresses?.stx?.[0]?.address;
   }
-  return null;
+  return isUserSignedIn() ? userSession.loadUserData() : null; 
 }
 
 // Sign out user
 export function signOut() {
-  console.log('Signing out user and clearing all authentication data...');
-  userSession.signUserOut();
-  
-  // Clear any additional browser storage that might persist wallet state
-  if (typeof window !== 'undefined') {
-    // Clear localStorage items that might store wallet state
-    localStorage.removeItem('blockstack-session');
-    localStorage.removeItem('blockstack-transit-private-key');
-    localStorage.removeItem('stacks-wallet-state');
-    localStorage.removeItem('connect-wallet-state');
-    
-    // Clear sessionStorage as well
-    sessionStorage.clear();
-    
-    console.log('Cleared browser storage, reloading page...');
-  }
-  
-  // Force reload to ensure clean state
-  window.location.reload();
+  disconnectWallet();
 }
 
+// Get STX balance for a given address
 export async function getSTXBalance(address: string): Promise<bigint> {
   try {
     const response = await fetch(`${STACKS_API_URL}/extended/v1/address/${address}/balances`);
@@ -145,6 +140,7 @@ export async function getSTXBalance(address: string): Promise<bigint> {
   }
 }
 
+// Format STX balance from microSTX to readable format
 export function formatSTX(microSTX: bigint): string {
   const stx = Number(microSTX) / 1000000;
   return stx.toLocaleString('en-US', { 
@@ -152,3 +148,37 @@ export function formatSTX(microSTX: bigint): string {
     maximumFractionDigits: 6 
   });
 }
+
+// Helper function to get current block height for deadline calculations
+export async function getCurrentBlockHeight(): Promise<number> {
+  try {
+    const res = await fetch(`${STACKS_API_URL}/v2/info`);
+    if (!res.ok) throw new Error(`Status ${res.status}`);
+    const data = await res.json();
+    const height = data.stacks_tip_height || 0;
+    return typeof height === 'number' ? height : parseInt(height, 10) || 0;
+  } catch (error) {
+    console.error('Failed to fetch current block height:', error);
+    return 0;
+  }
+}
+
+// Debug helpers
+export function debugNetwork() {
+  const n: any = NETWORK;
+  console.log('[debugNetwork]', { coreApiUrl: n.coreApiUrl || n.coreApiUrlBase });
+}
+
+export function debugProviders() {
+  if (typeof window === 'undefined') { console.log('No window (SSR)'); return; }
+  console.log('[providers]', {
+    LeatherProvider: !!(window as any).LeatherProvider,
+    HiroWalletProvider: !!(window as any).HiroWalletProvider,
+    StacksProvider: !!(window as any).StacksProvider,
+    XverseProviders: !!(window as any).XverseProviders,
+    AllProviders: Object.keys(window).filter((key) => key.toLowerCase().includes("provider"))
+  });
+}
+
+// Export the contract calling function for use in contract.ts
+export { callContractWithRequest, isConnected, getLocalStorage };
