@@ -10,9 +10,10 @@ import {
   boolCV,
   fetchCallReadOnlyFunction,
   cvToJSON,
-  hexToCV
+  hexToCV,
+  serializeCV
 } from '@stacks/transactions';
-import { NETWORK, CONTRACT_ADDRESS, CONTRACT_NAME } from './stacks';
+import { NETWORK, CONTRACT_ADDRESS, CONTRACT_NAME, appDetails } from './stacks';
 import { openContractCall } from '@stacks/connect';
 
 export interface CreateTaskParams {
@@ -56,6 +57,8 @@ export class BitBondContract {
 
   // Create a new accountability task
   async createTask(params: CreateTaskParams, senderAddress: string): Promise<string> {
+    console.log('BitBondContract.createTask called with:', params, senderAddress);
+    
     const functionArgs = [
       standardPrincipalCV(params.buddy),
       stringAsciiCV(params.title),
@@ -64,27 +67,59 @@ export class BitBondContract {
       uintCV(params.deadline)
     ];
 
-    const txOptions = {
+    const options = {
       contractAddress: this.contractAddress,
       contractName: this.contractName,
       functionName: 'create-task',
       functionArgs,
-      senderKey: '', // Will be handled by wallet
-      validateWithAbi: true,
       network: NETWORK,
-      anchorMode: AnchorMode.Any,
+      appDetails,
+      postConditionMode: PostConditionMode.Allow, // Allow transactions without strict post-conditions
     };
 
+    console.log('Calling openContractCall with options:', options);
+    console.log('Contract address being called:', this.contractAddress);
+    console.log('Network configuration:', NETWORK);
+    
     return new Promise((resolve, reject) => {
-      openContractCall({
-        ...txOptions,
-        onFinish: (data) => {
-          resolve(data.txId);
-        },
-        onCancel: () => {
-          reject(new Error('Transaction cancelled'));
-        },
-      });
+      const timeoutId = setTimeout(() => {
+        console.error('Contract call timed out after 60 seconds');
+        console.log('🔍 Troubleshooting steps:');
+        console.log('1. ✅ Check if Xverse extension popup was blocked by browser');
+        console.log('2. ✅ Verify Xverse is connected to Testnet (not Mainnet)');
+        console.log('3. ✅ Ensure you have testnet STX for transaction fees');
+        console.log('4. ✅ Try refreshing the page and reconnecting wallet');
+        console.log('5. ✅ Check if another wallet extension is interfering');
+        reject(new Error('Transaction timed out after 60 seconds. Please check if Xverse popup was blocked or if you need to switch to Testnet.'));
+      }, 60000); // Increased to 60 seconds to give more time
+
+      try {
+        openContractCall({
+          ...options,
+          onFinish: (data: { txId: string }) => {
+            clearTimeout(timeoutId);
+            console.log('✅ Transaction successful! TX ID:', data.txId);
+            resolve(data.txId);
+          },
+          onCancel: () => {
+            clearTimeout(timeoutId);
+            console.log('❌ Transaction cancelled by user in wallet');
+            reject(new Error('Transaction was cancelled by user'));
+          },
+        });
+        
+        console.log('✅ openContractCall initiated successfully');
+        console.log('🔄 Waiting for Xverse wallet popup...');
+        console.log('💡 If no popup appears within 10 seconds:');
+        console.log('   - Check browser address bar for popup blocker icon');
+        console.log('   - Ensure Xverse is set to Stacks Testnet');
+        console.log('   - Try clicking the Xverse extension icon manually');
+        
+      } catch (error) {
+        clearTimeout(timeoutId);
+        console.error('❌ openContractCall failed immediately:', error);
+        reject(new Error(`Failed to initiate wallet transaction: ${error instanceof Error ? error.message : 'Unknown error'}`));
+      }
     });
   }
 
@@ -263,6 +298,60 @@ export class BitBondContract {
     } catch (error) {
       console.error('Error checking if task expired:', error);
       return false;
+    }
+  }
+
+  // Helper method to get recent tasks (for dashboard display)
+  async getRecentTasks(limit: number = 10): Promise<Task[]> {
+    try {
+      const nextTaskId = await this.getNextTaskId();
+      const tasks: Task[] = [];
+      
+      // Load the most recent tasks
+      const tasksToLoad = Math.min(limit, nextTaskId - 1);
+      
+      for (let i = Math.max(1, nextTaskId - tasksToLoad); i < nextTaskId; i++) {
+        try {
+          const task = await this.getTask(i);
+          if (task) {
+            tasks.push(task);
+          }
+        } catch (error) {
+          console.error(`Error loading task ${i}:`, error);
+        }
+      }
+      
+      // Sort by creation time, most recent first
+      return tasks.sort((a, b) => b.createdAt - a.createdAt);
+    } catch (error) {
+      console.error('Error loading recent tasks:', error);
+      return [];
+    }
+  }
+
+  // Helper method to get user's tasks
+  async getUserTasks(userAddress: string): Promise<Task[]> {
+    try {
+      const nextTaskId = await this.getNextTaskId();
+      const userTasks: Task[] = [];
+      
+      // Check all tasks to find ones created by or involving the user
+      for (let i = 1; i < nextTaskId; i++) {
+        try {
+          const task = await this.getTask(i);
+          if (task && (task.creator === userAddress || task.buddy === userAddress)) {
+            userTasks.push(task);
+          }
+        } catch (error) {
+          console.error(`Error loading task ${i}:`, error);
+        }
+      }
+      
+      // Sort by creation time, most recent first
+      return userTasks.sort((a, b) => b.createdAt - a.createdAt);
+    } catch (error) {
+      console.error('Error loading user tasks:', error);
+      return [];
     }
   }
 }
