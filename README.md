@@ -47,6 +47,6 @@ supabase/              # Database migrations and seed data
 
 - ✅ Project initialization complete
 - ✅ Database schema designed
-- ⏳ Smart contract development (Phase 2)
-- ⏳ Wallet integration (Phase 3)
+- ✅ Smart contract development (Phase 2)
+- ✅ Wallet integration (Phase 3)
 - ⏳ Task management system (Phase 4)
