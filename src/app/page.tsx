@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -20,7 +20,7 @@ import {
   Bitcoin
 } from 'lucide-react';
 import { BitBondContract } from '@/lib/contract';
-import { connectWallet, getSTXBalance, formatSTX } from '@/lib/stacks';
+import { connectWallet, getSTXBalance, formatSTX, isUserSignedIn, getCurrentUserData, userSession, getAvailableWallets, signOut } from '@/lib/stacks';
 
 interface Task {
   id: number;
@@ -58,14 +58,59 @@ export default function HomePage() {
   const [isLoading, setIsLoading] = useState(false);
   const [contract] = useState(new BitBondContract());
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [isInitialized, setIsInitialized] = useState(false); // Prevent multiple initializations
 
-  const handleConnectWallet = async () => {
-    setIsLoading(true);
+  // Check authentication state on component mount - ONLY ONCE
+  useEffect(() => {
+    if (isInitialized) return; // Prevent multiple runs
+    
+    let mounted = true;
+    
+    const initializeAuth = async () => {
+      try {
+        console.log('🔄 Initializing authentication...');
+        
+        // Handle pending sign in if user is returning from wallet authentication
+        if (userSession.isSignInPending()) {
+          console.log('📝 Handling pending sign in...');
+          const userData = await userSession.handlePendingSignIn();
+          if (mounted) {
+            console.log('✅ Pending sign in completed:', userData.profile.stxAddress.testnet);
+            const address = userData.profile.stxAddress.testnet;
+            setUserAddress(address);
+            setIsConnected(true);
+          }
+        } else if (isUserSignedIn()) {
+          // User is already signed in
+          const userData = getCurrentUserData();
+          if (userData && mounted) {
+            console.log('✅ User already authenticated:', userData.profile.stxAddress.testnet);
+            const address = userData.profile.stxAddress.testnet;
+            setUserAddress(address);
+            setIsConnected(true);
+          }
+        }
+        
+        if (mounted) {
+          setIsInitialized(true);
+        }
+      } catch (error) {
+        console.error('❌ Error during authentication initialization:', error);
+        if (mounted) {
+          setIsInitialized(true); // Still mark as initialized to prevent retries
+        }
+      }
+    };
+
+    initializeAuth();
+
+    return () => {
+      mounted = false;
+    };
+  }, [isInitialized]); // Only depend on isInitialized to prevent multiple runs
+
+  const loadUserData = async (address: string) => {
     try {
-      const address = await connectWallet();
-      setUserAddress(address);
-      setIsConnected(true);
-      
       // Get user balance
       const userBalance = await getSTXBalance(address);
       setBalance(userBalance);
@@ -77,80 +122,101 @@ export default function HomePage() {
           tasksCreated: Number(stats.tasksCreated),
           tasksCompleted: Number(stats.tasksCompleted),
           tasksFailed: Number(stats.tasksFailed),
-          totalStaked: stats.totalStaked,
+          totalStaked: BigInt(stats.totalStaked),
           successRate: stats.tasksCreated > 0 
             ? (Number(stats.tasksCompleted) / Number(stats.tasksCreated)) * 100 
             : 0
         });
       }
     } catch (error) {
+      console.error('Error loading user data:', error);
+    }
+  };
+
+  const handleConnectWallet = async () => {
+    setIsLoading(true);
+    try {
+      // Debug wallet providers in detail
+      console.log('=== Wallet Provider Detection ===');
+      const availableWallets = getAvailableWallets();
+      console.log('Available wallets:', availableWallets);
+      
+      if (availableWallets.includes('leather')) {
+        console.log('✅ Leather (Hiro) wallet detected - excellent @stacks/connect compatibility');
+      }
+      if (availableWallets.includes('xverse')) {
+        console.log('⚠️ Xverse wallet detected - may have limited compatibility');
+      }
+      if (availableWallets.length === 0) {
+        console.log('❌ No Stacks wallets detected');
+      }
+      
+      console.log('window.LeatherProvider:', typeof window !== 'undefined' ? (window as any).LeatherProvider : 'undefined');
+      console.log('window.HiroWalletProvider:', typeof window !== 'undefined' ? (window as any).HiroWalletProvider : 'undefined');
+      console.log('================================');
+      
+      const address = await connectWallet();
+      setUserAddress(address);
+      setIsConnected(true);
+      
+      // Load user data after connection
+      await loadUserData(address);
+    } catch (error) {
       console.error('Failed to connect wallet:', error);
     }
     setIsLoading(false);
   };
 
-  const handleTaskCreated = (newTask: Task) => {
-    setRecentTasks(prev => [newTask, ...prev]);
+  const handleTaskCreated = async () => {
+    // Refresh recent tasks after creating a new one
+    await loadRecentTasks();
     // Refresh user stats
     if (userAddress) {
-      contract.getUserStats(userAddress).then(stats => {
-        if (stats) {
-          setUserStats({
-            tasksCreated: Number(stats.tasksCreated),
-            tasksCompleted: Number(stats.tasksCompleted),
-            tasksFailed: Number(stats.tasksFailed),
-            totalStaked: stats.totalStaked,
-            successRate: stats.tasksCreated > 0 
-              ? (Number(stats.tasksCompleted) / Number(stats.tasksCreated)) * 100 
-              : 0
-          });
-        }
-      });
+      const stats = await contract.getUserStats(userAddress);
+      if (stats) {
+        setUserStats({
+          tasksCreated: Number(stats.tasksCreated),
+          tasksCompleted: Number(stats.tasksCompleted),
+          tasksFailed: Number(stats.tasksFailed),
+          totalStaked: BigInt(stats.totalStaked),
+          successRate: stats.tasksCreated > 0 
+            ? (Number(stats.tasksCompleted) / Number(stats.tasksCreated)) * 100 
+            : 0
+        });
+      }
     }
   };
 
-  useEffect(() => {
-    const mockTasks: Task[] = [
-      {
-        id: 1,
-        title: "Complete Daily Workout",
-        description: "30-minute morning workout routine",
-        creator: "SP2J6ZY48GV1EZ5V2V5RB9MP66SW86PYKKNRV9EJ7",
-        buddy: "SP2PABAF9FTAJYNFZH93XENAJ8FVY99RRM50D2JG9",
-        stakeAmount: BigInt(1000000), // 1 STX
-        deadline: 150,
-        status: 'active',
-        verified: false,
-        createdAt: Date.now() - 3600000
-      },
-      {
-        id: 2,
-        title: "Read 10 Pages",
-        description: "Read 10 pages of 'Atomic Habits'",
-        creator: "SP2PABAF9FTAJYNFZH93XENAJ8FVY99RRM50D2JG9",
-        buddy: "SP2J6ZY48GV1EZ5V2V5RB9MP66SW86PYKKNRV9EJ7",
-        stakeAmount: BigInt(500000), // 0.5 STX
-        deadline: 200,
-        status: 'completed',
-        verified: true,
-        createdAt: Date.now() - 7200000
-      },
-      {
-        id: 3,
-        title: "No Social Media",
-        description: "Avoid social media for the entire day",
-        creator: "SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE",
-        buddy: "SP2J6ZY48GV1EZ5V2V5RB9MP66SW86PYKKNRV9EJ7",
-        stakeAmount: BigInt(750000), // 0.75 STX
-        deadline: 180,
-        status: 'failed',
-        verified: true,
-        createdAt: Date.now() - 10800000
-      }
-    ];
+  const loadRecentTasks = useCallback(async () => {
+    try {
+      const tasks = await contract.getRecentTasks(10);
+      
+      // Convert contract task format to UI task format
+      const uiTasks: Task[] = tasks.map(task => ({
+        id: task.taskId,
+        title: task.title,
+        description: task.description,
+        creator: task.creator,
+        buddy: task.buddy,
+        stakeAmount: BigInt(task.stakeAmount),
+        deadline: task.deadline,
+        status: task.status as 'active' | 'completed' | 'failed' | 'expired',
+        verified: task.verified,
+        createdAt: task.createdAt
+      }));
+      
+      setRecentTasks(uiTasks);
+    } catch (error) {
+      console.error('Error loading recent tasks:', error);
+      // Keep empty array if error
+      setRecentTasks([]);
+    }
+  }, [contract]);
 
-    setRecentTasks(mockTasks);
-  }, []);
+  useEffect(() => {
+    // Only load recent tasks once when component mounts
+    loadRecentTasks();
+  }, [loadRecentTasks]); // Add loadRecentTasks back as dependency since it's memoized
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-orange-50 via-white to-amber-50">
@@ -199,6 +265,14 @@ export default function HomePage() {
                   <span className="text-orange-100">
                     Balance: {formatSTX(balance)} STX
                   </span>
+                  <Button 
+                    variant="outline" 
+                    size="sm"
+                    onClick={signOut}
+                    className="border-white/20 text-white/80 hover:bg-white/10 hover:text-white"
+                  >
+                    Disconnect
+                  </Button>
                 </div>
               )}
               
@@ -448,8 +522,8 @@ export default function HomePage() {
 
       {/* Create Task Modal */}
       <CreateTaskModal
-        isOpen={isCreateModalOpen}
-        onClose={() => setIsCreateModalOpen(false)}
+        open={isCreateModalOpen}
+        onOpenChange={setIsCreateModalOpen}
         onTaskCreated={handleTaskCreated}
         userAddress={userAddress}
       />
