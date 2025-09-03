@@ -3,12 +3,13 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogClose } from '@
 import { Button } from '@/components/ui/button';
 import { Input, Textarea, Label } from '@/components/ui/input';
 import { X, Calendar, User, DollarSign, FileText, Target } from 'lucide-react';
-import { getCurrentBlockHeight, CONTRACT_ADDRESS, callContractWithRequest, NETWORK, isConnected, getLocalStorage, userSession } from '@/lib/stacks';
+import { getCurrentBlockHeight, CONTRACT_ADDRESS, CONTRACT_NAME, callContractWithRequest, NETWORK, isConnected, getLocalStorage, userSession } from '@/lib/stacks';
 import { 
   standardPrincipalCV,
   stringAsciiCV,
   uintCV
 } from '@stacks/transactions';
+import toast from 'react-hot-toast';
 
 interface CreateTaskModalProps {
   open: boolean;
@@ -37,35 +38,35 @@ export const CreateTaskModal: React.FC<CreateTaskModalProps> = ({
     console.log('Form submission started', formData);
 
     if (!CONTRACT_ADDRESS) {
-      alert('Contract address is not configured. Set NEXT_PUBLIC_CONTRACT_ADDRESS in env.');
+      toast.error('Contract address is not configured. Set NEXT_PUBLIC_CONTRACT_ADDRESS in env.');
       return;
     }
     
     if (!formData.title || !formData.description || !formData.buddyAddress || !formData.stakeAmount || !formData.deadline) {
-      alert('Please fill in all fields');
+      toast.error('Please fill in all fields');
       return;
     }
 
     const stakeFloat = parseFloat(formData.stakeAmount);
     if (isNaN(stakeFloat) || stakeFloat <= 0) {
-      alert('Stake amount must be a positive number');
+      toast.error('Stake amount must be a positive number');
       return;
     }
 
     const deadlineDate = new Date(formData.deadline);
     if (isNaN(deadlineDate.getTime())) {
-      alert('Invalid deadline');
+      toast.error('Invalid deadline');
       return;
     }
     const now = Date.now();
     if (deadlineDate.getTime() <= now) {
-      alert('Deadline must be in the future');
+      toast.error('Deadline must be in the future');
       return;
     }
 
     // Check if user is connected
     if (!isConnected() && !userSession.isUserSignedIn()) {
-      alert('Please connect your wallet first');
+      toast.error('Please connect your wallet first');
       return;
     }
 
@@ -82,7 +83,7 @@ export const CreateTaskModal: React.FC<CreateTaskModalProps> = ({
       console.log('Deadline calculation:', { currentBlockHeight, deltaBlocks, absoluteDeadlineBlock, deadlineDate });
 
       if (absoluteDeadlineBlock <= currentBlockHeight) {
-        alert('Calculated deadline block is not in the future. Try a later datetime.');
+        toast.error('Calculated deadline block is not in the future. Try a later datetime.');
         return;
       }
 
@@ -104,13 +105,15 @@ export const CreateTaskModal: React.FC<CreateTaskModalProps> = ({
       // Use the working contract call pattern
       const options = {
         contractAddress: CONTRACT_ADDRESS,
-        contractName: 'bitbond-escrow',
+        contractName: CONTRACT_NAME,
         functionName: 'create-task',
         functionArgs,
         network: NETWORK,
         onFinish: (data: any) => {
           console.log('✅ Task created successfully:', data);
-          alert(`Task created successfully! Transaction ID: ${data.txId || data}`);
+          toast.success('Task created successfully!', {
+            duration: 5000,
+          });
           
           // Reset form
           setFormData({
@@ -126,7 +129,7 @@ export const CreateTaskModal: React.FC<CreateTaskModalProps> = ({
         },
         onCancel: () => {
           console.log('❌ Transaction cancelled by user');
-          alert('Transaction was cancelled');
+          toast.error('Transaction was cancelled');
         },
       };
 
@@ -135,7 +138,7 @@ export const CreateTaskModal: React.FC<CreateTaskModalProps> = ({
       
     } catch (error) {
       console.error('Detailed error creating task:', error);
-      alert('Failed to create task: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      toast.error('Failed to create task: ' + (error instanceof Error ? error.message : 'Unknown error'));
     } finally {
       setIsSubmitting(false);
     }
