@@ -1,11 +1,11 @@
-;; title: bitbond-escrow
-;; version:
-;; summary:
-;; description:
+;; title: bitbond-escrow-v2
+;; version: 2.0
+;; summary: BitBond Escrow Contract with Two-Phase Verification
+;; description: Enhanced accountability buddy system with foolproof verification
 
-;; BitBond Escrow Contract
+;; BitBond Escrow Contract V2
 ;; Accountability buddy system where users stake STX on task completion
-;; verified by assigned buddies
+;; verified by assigned buddies with two-phase verification system
 
 ;; Constants
 (define-constant contract-owner tx-sender)

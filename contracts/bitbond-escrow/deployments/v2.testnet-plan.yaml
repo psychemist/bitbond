@@ -1,6 +1,6 @@
 ---
 id: 0
-name: Testnet deployment
+name: BitBond Escrow V2 Testnet deployment
 network: testnet
 stacks-node: "https://api.testnet.hiro.so"
 bitcoin-node: "http://blockstack:blockstacksystem@bitcoind.testnet.stacks.co:18332"
@@ -9,10 +9,10 @@ plan:
     - id: 0
       transactions:
         - contract-publish:
-            contract-name: bitbond-escrow
+            contract-name: bitbond-escrow-v2
             expected-sender: ST16XCPGV6CVM7D5M1H3BGT0VKDGNFKPRDSQXRW88
-            cost: 72610
-            path: contracts/bitbond-escrow.clar
+            cost: 75000
+            path: contracts/bitbond-escrow-v2.clar
             anchor-block-only: true
             clarity-version: 3
       epoch: "3.2"
