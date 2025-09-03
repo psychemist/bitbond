@@ -8,7 +8,7 @@ const IS_MAINNET = process.env.NEXT_PUBLIC_STACKS_NETWORK === 'mainnet';
 export const NETWORK = IS_MAINNET ? STACKS_MAINNET : STACKS_TESTNET;
 
 export const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || '';
-export const CONTRACT_NAME = process.env.NEXT_PUBLIC_CONTRACT_NAME || 'bitbond-escrow';
+export const CONTRACT_NAME = process.env.NEXT_PUBLIC_CONTRACT_NAME || 'bitbond-escrow-v2';
 export const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 
 // App configuration
@@ -23,12 +23,6 @@ export const appDetails = {
 // Connect wallet using the working pattern from reference
 export const connectWallet = async (): Promise<string> => {
   console.log("=== Connect Wallet Debug ===");
-
-  if (typeof window !== "undefined") {
-    console.log("StacksProvider available:", !!(window as any).StacksProvider);
-    console.log("LeatherProvider available:", !!(window as any).LeatherProvider);
-    console.log("Available providers:", Object.keys(window).filter((key) => key.includes("Provider")));
-  }
 
   try {
     await connect();
@@ -61,12 +55,6 @@ export const disconnectWallet = () => {
 // Helper function to call contracts using request method (more reliable than openContractCall)
 async function callContractWithRequest(options: any) {
   try {
-    console.log("=== Contract Call Debug ===");
-    console.log("functionName:", options.functionName);
-    console.log("functionArgs:", options.functionArgs);
-    console.log("Contract:", `${options.contractAddress}.${options.contractName}`);
-    console.log("Network:", options.network?.chainId === 2147483648 ? "testnet" : "mainnet");
-
     const response = await request("stx_callContract", {
       contract: `${options.contractAddress}.${options.contractName}` as `${string}.${string}`,
       functionName: options.functionName,

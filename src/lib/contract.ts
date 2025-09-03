@@ -13,7 +13,7 @@ import {
   hexToCV,
   serializeCV
 } from '@stacks/transactions';
-import { NETWORK, CONTRACT_ADDRESS, CONTRACT_NAME, appDetails } from './stacks';
+import { NETWORK, CONTRACT_ADDRESS, CONTRACT_NAME, appDetails, getCurrentBlockHeight } from './stacks';
 import { openContractCall } from '@stacks/connect';
 
 export interface CreateTaskParams {
@@ -34,8 +34,13 @@ export interface Task {
   deadline: number;
   status: string;
   createdAt: number;
+  markedCompletedAt?: number; // New field for two-phase verification
   verified: boolean;
   verificationTime?: number;
+  // UI helpers for datetime display
+  createdAtDate: Date;
+  deadlineDate: Date;
+  markedCompletedAtDate?: Date;
 }
 
 export interface UserStats {
@@ -77,10 +82,6 @@ export class BitBondContract {
       postConditionMode: PostConditionMode.Allow, // Allow transactions without strict post-conditions
     };
 
-    console.log('Calling openContractCall with options:', options);
-    console.log('Contract address being called:', this.contractAddress);
-    console.log('Network configuration:', NETWORK);
-    
     return new Promise((resolve, reject) => {
       const timeoutId = setTimeout(() => {
         reject(new Error('Transaction timed out after 60 seconds. Please check if popup was blocked or if you need to switch to Testnet.'));
@@ -138,6 +139,60 @@ export class BitBondContract {
     });
   }
 
+  // Creator marks task as completed (Phase 1 of two-phase verification)
+  async markTaskCompleted(taskId: number, senderAddress: string): Promise<string> {
+    const functionArgs = [uintCV(taskId)];
+
+    const txOptions = {
+      contractAddress: this.contractAddress,
+      contractName: this.contractName,
+      functionName: 'mark-task-completed',
+      functionArgs,
+      validateWithAbi: true,
+      network: NETWORK,
+      anchorMode: AnchorMode.Any,
+    };
+
+    return new Promise((resolve, reject) => {
+      openContractCall({
+        ...txOptions,
+        onFinish: (data) => {
+          resolve(data.txId);
+        },
+        onCancel: () => {
+          reject(new Error('Transaction cancelled'));
+        },
+      });
+    });
+  }
+
+  // Handle expired task scenarios (replaces reclaim-expired-stake)
+  async handleExpiredTask(taskId: number, senderAddress: string): Promise<string> {
+    const functionArgs = [uintCV(taskId)];
+
+    const txOptions = {
+      contractAddress: this.contractAddress,
+      contractName: this.contractName,
+      functionName: 'handle-expired-task',
+      functionArgs,
+      validateWithAbi: true,
+      network: NETWORK,
+      anchorMode: AnchorMode.Any,
+    };
+
+    return new Promise((resolve, reject) => {
+      openContractCall({
+        ...txOptions,
+        onFinish: (data) => {
+          resolve(data.txId);
+        },
+        onCancel: () => {
+          reject(new Error('Transaction cancelled'));
+        },
+      });
+    });
+  }
+
   // Creator reclaims expired stake
   async reclaimExpiredStake(taskId: number, senderAddress: string): Promise<string> {
     const functionArgs = [uintCV(taskId)];
@@ -165,9 +220,28 @@ export class BitBondContract {
     });
   }
 
+  // Convert block heights to dates using current block height as reference
+  private async convertBlockToDate(blockHeight: number): Promise<Date> {
+    try {
+      const currentBlockHeight = await getCurrentBlockHeight();
+      const blockDifference = blockHeight - currentBlockHeight;
+      const timeDifferenceMs = blockDifference * 10 * 60 * 1000; // 10 minutes per block
+      return new Date(Date.now() + timeDifferenceMs);
+    } catch (error) {
+      console.error('Error converting block to date:', error);
+      // Fallback: estimate based on a reasonable current block (testnet is around 155000-160000)
+      const estimatedCurrentBlock = 157000;
+      const blockDifference = blockHeight - estimatedCurrentBlock;
+      const timeDifferenceMs = blockDifference * 10 * 60 * 1000;
+      return new Date(Date.now() + timeDifferenceMs);
+    }
+  }
+
   // Read-only functions
   async getTask(taskId: number): Promise<Task | null> {
     try {
+      console.log(`Fetching task ${taskId}...`);
+      
       const result = await fetchCallReadOnlyFunction({
         contractAddress: this.contractAddress,
         contractName: this.contractName,
@@ -178,12 +252,59 @@ export class BitBondContract {
       });
 
       const taskData = cvToJSON(result);
+      console.log(`Task ${taskId} raw data:`, taskData);
       
-      if (taskData.type === 'none') {
+      // Handle Clarity optional type - check if it's none
+      if (!taskData || taskData.type === 'none' || !taskData.value) {
+        console.log(`Task ${taskId} not found (none type or missing value)`);
         return null;
       }
 
-      const task = taskData.value;
+      // For optional types, the actual data is nested: taskData.value.value
+      let task;
+      if (taskData.value && taskData.value.value) {
+        // Handle nested optional structure
+        task = taskData.value.value;
+      } else if (taskData.value) {
+        // Handle direct structure
+        task = taskData.value;
+      } else {
+        console.log(`Task ${taskId} has no value property`);
+        return null;
+      }
+
+      // Check if task object exists and has the basic structure
+      if (!task || typeof task !== 'object') {
+        console.log(`Task ${taskId} has invalid structure:`, task);
+        return null;
+      }
+
+      console.log(`Task ${taskId} extracted data:`, task);
+
+      // Validate that all required fields exist with proper values
+      const requiredFields = ['creator', 'buddy', 'title', 'description', 'stake-amount', 'deadline', 'status', 'created-at', 'verified'];
+      
+      for (const field of requiredFields) {
+        if (!task[field] || (task[field].value === undefined && task[field].value !== false)) {
+          console.log(`Task ${taskId} missing or invalid field '${field}':`, task[field]);
+          return null;
+        }
+      }
+
+      console.log(`Task ${taskId} successfully parsed:`, {
+        creator: task.creator.value,
+        buddy: task.buddy.value,
+        title: task.title.value,
+        status: task.status.value
+      });
+
+      // Convert dates properly using current block height as reference
+      const createdAtDate = await this.convertBlockToDate(parseInt(task['created-at'].value));
+      const deadlineDate = await this.convertBlockToDate(parseInt(task.deadline.value));
+      const markedCompletedAtDate = task['marked-completed-at']?.value 
+        ? await this.convertBlockToDate(parseInt(task['marked-completed-at'].value))
+        : undefined;
+
       return {
         taskId,
         creator: task.creator.value,
@@ -194,11 +315,16 @@ export class BitBondContract {
         deadline: parseInt(task.deadline.value),
         status: task.status.value,
         createdAt: parseInt(task['created-at'].value),
+        markedCompletedAt: task['marked-completed-at']?.value ? parseInt(task['marked-completed-at'].value) : undefined,
         verified: task.verified.value,
-        verificationTime: task['verification-time']?.value ? parseInt(task['verification-time'].value) : undefined
+        verificationTime: task['verification-time']?.value ? parseInt(task['verification-time'].value) : undefined,
+        // Properly converted dates
+        createdAtDate,
+        deadlineDate,
+        markedCompletedAtDate
       };
     } catch (error) {
-      console.error('Error fetching task:', error);
+      console.error(`Error fetching task ${taskId}:`, error);
       return null;
     }
   }
@@ -336,6 +462,30 @@ export class BitBondContract {
       return userTasks.sort((a, b) => b.createdAt - a.createdAt);
     } catch (error) {
       console.error('Error loading user tasks:', error);
+      return [];
+    }
+  }
+
+  // Get tasks created by user (My Tasks tab) - Updated for V2 contract
+  async getTasksByCreator(userAddress: string): Promise<Task[]> {
+    try {
+      // Use the existing getUserTasks method and filter in JavaScript
+      const allTasks = await this.getUserTasks(userAddress);
+      return allTasks.filter(task => task.creator === userAddress);
+    } catch (error) {
+      console.error('Error fetching tasks by creator:', error);
+      return [];
+    }
+  }
+
+  // Get tasks where user is the buddy (Buddy Requests tab) - Updated for V2 contract
+  async getTasksByBuddy(userAddress: string): Promise<Task[]> {
+    try {
+      // Use the existing getUserTasks method and filter in JavaScript
+      const allTasks = await this.getUserTasks(userAddress);
+      return allTasks.filter(task => task.buddy === userAddress);
+    } catch (error) {
+      console.error('Error fetching tasks by buddy:', error);
       return [];
     }
   }
